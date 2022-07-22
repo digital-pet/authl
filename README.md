@@ -20,3 +20,17 @@ Run init.py to create the SQLite DB.
 Run authl.py
 
 If you want to get fancy, you can set it up to run as a daemon but that is outside the scope of this readme.
+
+## Commands
+
+### User
+- /authme <sa username> - starts the auth process for a user
+
+### Moderator (anyone with Manage Roles)
+- /authem <@user> <sa username> - let's a mod start the auth process for a user if they can't use slash commands
+- /bangoon <sa username> - bans a goon who has already authed and prevents them from re-authenticating. Does not strip roles.
+- /unbangoon <sa username> - unbans a goon
+- /unsus <sa username> - clears the j4g block on a goon (currently hardcoded to 300 posts/3 months)
+- /listbanned - lists all banned users
+- /listsus - lists all suspicious users
+- /listunauth - lists all users who have started but not completed auth
