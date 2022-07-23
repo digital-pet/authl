@@ -1,6 +1,15 @@
 # authl
  An Awful Authbot for Discord, from Goosefleet with love.
 
+## Features
+
+- It works!
+- Prevents fresh SA accounts from joining, because we all know :tenbux: does not make a culture fit.
+- Allows an admin to override those decisions!
+- Also allows you to permanently  (or impermanently) ban people from your discord.
+- No central database of goons that you're beholden to, you alone decide which goons are allowed.
+- Probably won't crash!
+
 ## Prerequisites
 
 - interactions.py
@@ -31,6 +40,6 @@ If you want to get fancy, you can set it up to run as a daemon but that is outsi
 - /bangoon &lt;sa username> - bans a goon who has already authed and prevents them from re-authenticating. Does not strip roles.
 - /unbangoon &lt;sa username> - unbans a goon
 - /unsus &lt;sa username> - clears the j4g block on a goon (currently hardcoded to 300 posts/3 months)
-- /listbanned - lists all banned users
+- /listban - lists all banned users
 - /listsus - lists all suspicious users
 - /listunauth - lists all users who have started but not completed auth
