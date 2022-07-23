@@ -6,7 +6,7 @@
 - It works!
 - Prevents fresh SA accounts from joining, because we all know :tenbux: does not make a culture fit.
 - Allows an admin to override those decisions!
-- Also allows you to permanently  (or impermanently) ban people from your discord.
+- Also allows you to permanently  (or impermanently) ban goons from getting the goon role.
 - No central database of goons that you're beholden to, you alone decide which goons are allowed.
 - Probably won't crash!
 
