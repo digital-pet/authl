@@ -82,13 +82,14 @@ async def auth_processor():
     get_params = {}
     
     auth_query = '''UPDATE goons SET is_authed=1 WHERE userID=:userid LIMIT 1'''
+
     await asyncio.sleep(10)
 
     botspamchannel = interactions.Channel(**await bot._http.get_channel(bschan), _client=bot._http)
 
     while True:
         await asyncio.sleep(10)
-        print("auth thread running")
+        logging.info("auth worker running")
         results = query(dbfile, get_query, get_params)
         if results:
             success = ""
@@ -125,7 +126,7 @@ async def auth_processor():
             if displaymessage:
                 await botspamchannel.send("Gave goon role to the following users " + success)
                     
-        print("auth thread waiting")
+        logging.info("auth worker waiting")
         await asyncio.sleep(890)
 
 
@@ -158,7 +159,6 @@ async def calculate_suspicion(userid):
 
     sus = 0
     
-    
     #sub 300 postcount is sus
     re_res = re.search(r"en \<b\>-?([0-9]*)\<\/b\> po", fulltext)
 
@@ -183,6 +183,9 @@ async def get_user(userid,discordid):
     get_query = '''SELECT * FROM goons WHERE userID=:userid OR discordID=:discordid'''
     get_params = {"userid": userid, "discordid":discordid}
     
+    kos_check_query = '''SELECT * FROM kos WHERE userID=:userid LIMIT 1'''
+    kos_params = {"userid":userid}
+    
     results = query(dbfile, get_query, get_params)
     if len(results) > 1:
         raise DuplicateEntry("Expected 1 result, got " + len(results))
@@ -192,11 +195,15 @@ async def get_user(userid,discordid):
         #If there isn't an existing user, add it.
         sus = await calculate_suspicion(userid)
 
+        # TODO: log in botspam if sus
+
         secret = crypt.crypt(f"{discordid}{userid}")
         minsecret = "HONK!" + secret[20:32]
         
-        ins_query = '''INSERT INTO goons values (:userid,:discordid,:secret,0,0,:sus)'''
-        ins_params = {"userid": userid,"discordid": discordid,"secret":minsecret,"sus":sus}
+        ban = 1 if len(query(dbfile,kos_check_query,kos_params)) else 0
+        
+        ins_query = '''INSERT INTO goons values (:userid,:discordid,:secret,:ban,0,:sus)'''
+        ins_params = {"userid": userid,"discordid": discordid,"secret":minsecret,"ban":ban,"sus":sus}
         
         query(dbfile, ins_query,ins_params)
         results = query(dbfile, get_query, get_params)
@@ -367,7 +374,10 @@ async def listsus(ctx: interactions.CommandContext):
         response = str(len(result)) + " goons are sus:"
         for r in result:
             user = interactions.Member(**await bot._http.get_member(guildid,r[1]), _client=bot._http)
-            response = response + "\n" + user.mention + "(ID: " + r[0] + ")"
+            try:
+                response = response + "\n" + user.mention + " (ID: " + r[0] + ")"
+            except Exception:
+                response = response + "\n User not in discord (ID: " + r[0] + ")"
 
     else:
         response = "No goons are currently being sus."
@@ -398,7 +408,10 @@ async def listunauth(ctx: interactions.CommandContext):
         response = str(len(result)) + " goons haven't put the code in:"
         for r in result:
             user = interactions.Member(**await bot._http.get_member(guildid,r[1]), _client=bot._http)
-            response = response + "\n" + user.mention
+            try:
+                response = response + "\n" + user.mention + " (ID: " + r[0] + ")"
+            except Exception:
+                response = response + "\n User not in discord (ID: " + r[0] + ")"
 
     else:
         response = "All the goons have followed instructions."
@@ -422,19 +435,22 @@ async def listban(ctx: interactions.CommandContext):
     querystr = '''SELECT * FROM goons WHERE is_banned = 1'''
 
     params = {}
-
     result = query(dbfile, querystr, params)
-    
     if result:
         response = str(len(result)) + " goons are banned:"
         for r in result:
             user = interactions.Member(**await bot._http.get_member(guildid,r[1]), _client=bot._http)
-            response = response + "\n" + user.mention + "(ID: " + r[0] + ")"
-
+            try:
+                response = response + "\n" + user.mention + " (ID: " + r[0] + ")"
+            except Exception:
+                response = response + "\n User not in discord (ID: " + r[0] + ")"
+    
     else:
+
         response = "Nobody's banned!"
     
     await ctx.send(response)
+
 
 '''
 
@@ -471,6 +487,82 @@ async def unsus(ctx: interactions.CommandContext, username: str):
     query(dbfile, querystr, params)
 
     response  = f"{str(username)} with id {userid} has been cleared to authenticate."
+    
+    await ctx.send(response)
+
+'''
+
+'''
+
+@bot.command(
+    name="kline",
+    description="Ban a goon before they join",
+    dm_permission=False,
+    default_member_permissions=interactions.Permissions.MANAGE_ROLES,
+    options = [
+        interactions.Option(
+            name = "username",
+            description = "Their username on the Something Awful Forums",
+            type=interactions.OptionType.STRING,
+            required=True),],)
+
+
+
+async def kline(ctx: interactions.CommandContext, username: str):
+
+    querystr = '''INSERT INTO kos VALUES (:userid)'''
+
+    response = ""
+    userid = await get_userid(username)
+
+    if userid is None:
+        response = f"{username} is not registered on SA."
+        await ctx.send(response)
+        return
+        
+    params = {"userid": userid}
+    
+    query(dbfile, querystr, params)
+
+    response  = f"{str(username)} with id {userid} has been k-lined."
+    
+    await ctx.send(response)
+
+'''
+
+'''
+
+@bot.command(
+    name="unkline",
+    description="Unban a goon before they join",
+    dm_permission=False,
+    default_member_permissions=interactions.Permissions.MANAGE_ROLES,
+    options = [
+        interactions.Option(
+            name = "username",
+            description = "Their username on the Something Awful Forums",
+            type=interactions.OptionType.STRING,
+            required=True),],)
+
+
+
+async def unkline(ctx: interactions.CommandContext, username: str):
+
+    querystr = '''DELETE FROM kos WHERE userID=:userid LIMIT 1'''
+
+    response = ""
+    userid = await get_userid(username)
+
+    if userid is None:
+        response = f"{username} is not registered on SA."
+        await ctx.send(response)
+        return
+        
+    params = {"userid": userid}
+    
+    query(dbfile, querystr, params)
+
+    response  = f"{str(username)} with id {userid} has been unk-lined."
     
     await ctx.send(response)
 
@@ -585,5 +677,6 @@ except KeyboardInterrupt:
     logging.critical('Ctrl-C received, quitting immediately')
     os._exit(1)
 except Exception:
-    logging.error("Fatal error in main loop", exc_info=True)
+    print("Please wait, crashing...")
+    logging.critical("Fatal error in main loop", exc_info=True)
     os._exit(2)

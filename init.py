@@ -26,6 +26,10 @@ def query(db_name, querystring, params):
 
 querystring = '''CREATE TABLE goons (userID TEXT NOT NULL, discordID TEXT NOT NULL, secret TEXT NOT NULL, is_banned INTEGER NOT NULL CHECK (is_banned IN (0, 1)), is_authed INTEGER NOT NULL CHECK (is_authed IN (0, 1)), is_sus INTEGER NOT NULL CHECK (is_sus IN (0, 1))) '''
 
+querystring2 = '''CREATE TABLE kos (userID TEXT NOT NULL) '''
+
+
 params = {}
 
 query(dbfile,querystring,params)
+query(dbfile,querystring2,params)
