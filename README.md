@@ -40,6 +40,8 @@ If you want to get fancy, you can set it up to run as a daemon but that is outsi
 - /bangoon &lt;sa username> - bans a goon who has already authed and prevents them from re-authenticating. Does not strip roles.
 - /unbangoon &lt;sa username> - unbans a goon
 - /unsus &lt;sa username> - clears the j4g block on a goon (currently hardcoded to 300 posts/3 months)
+- /kline &lt;sa username> - adds a k-line for a goon who has not joined yet that will ban them when they try to auth
+- /unkline &lt;sa username> - removes a k-line for a goon
 - /listban - lists all banned users
 - /listsus - lists all suspicious users
 - /listunauth - lists all users who have started but not completed auth
