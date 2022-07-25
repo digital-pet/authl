@@ -97,6 +97,16 @@ async def auth_processor():
         
             for r in results:
                 userid = r[0]
+                
+                user = interactions.Member(**await bot._http.get_member(guildid,r[1]), _client=bot._http)
+
+                if user.user is None:
+                    
+                    logging.info(f"User with discord id {r[1]} is not in the server, skipping.")
+                
+                    continue
+
+                
                 result = await profile.fetch_profile_by_id(userid)
                 fulltext = result.raw_profile_text
                 
@@ -104,8 +114,7 @@ async def auth_processor():
                 if position > -1:
                     auth_params = {"userid":userid}
                     try:
-                        user = interactions.Member(**await bot._http.get_member(guildid,r[1]), _client=bot._http)
-                    
+                        
                         #await get(bot, interactions.Member, parent_id=guildid, object_id=r[1])
                         
                         await user.add_role(goonrole,guildid)
@@ -118,7 +127,7 @@ async def auth_processor():
                     
                     except Exception:
                         logging.error("Could not auth user", exc_info=True)
-                        await botspamchannel.send("Authenticating user " + user.mention + " failed. Blame corgski.")
+                        await botspamchannel.send("Authenticating user " + user.mention + " failed.")
                         await asyncio.sleep(10)
                         continue
                 await asyncio.sleep(10)
