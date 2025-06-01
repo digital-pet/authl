@@ -42,5 +42,6 @@ If you want to get fancy, you can set it up to run as a daemon but that is outsi
 - /listsus - lists all suspicious users
 - /listunauth - lists all users who have started but not completed auth
 
-- ### Admin
-- /roleupall <password> goes through the DB and re-assigns the goon role to all members of the discord who have previously authenticated. Use sparingly, for example if you have to delete and re-create the role.
+### Admin
+- /roleupall <password> - goes through the DB and re-assigns the goon role to all members of the discord who have previously authenticated. Use sparingly, for example if you have to delete and re-create the role.
+- /purge <userid> - removes a goon from the database entirely. Useful if they're switching discord accounts.
