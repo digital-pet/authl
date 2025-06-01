@@ -10,19 +10,15 @@
 - No central database of goons that you're beholden to, you alone decide which goons are allowed.
 - Probably won't crash!
 
-## Prerequisites
-
-- interactions.py
-- configparser
-- aiohttp
-- BS4
-- unicodedata
-
 ## Installation
 
 Fill in secrets.ini based on the example file in the repo. The SA info can be pulled from observing a request in the Developer Console or by exporting your cookies. The bot token you will get when creating the bot application in Discord Developer Portal. The bot should get the "bot" and "application commands" roles in the developer portal. The only permission the bot needs on your server itself is "Manage Roles" and I cannot emphasize enough that you should never be lazy and just give all bots Administrator on your server.
 
 Fill in config.ini. I highly recommend using the [Ripcord](https://cancel.fm/ripcord/) client to get the role/channel/guild IDs.
+
+Create a new venv
+
+`pip install -U -r requirements.txt`
 
 Run init.py to create the SQLite DB.
 
