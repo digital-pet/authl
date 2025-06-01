@@ -15,7 +15,7 @@ class AwfulProfile:
         self.logger.debug('Scraper started.')
     
     async def fetch_profile(self, username):
-        base_url = "https://forums.somethingawful.com/member.php?action=getinfo&username={0}"
+        base_url = "https://forums.somethingawful.com/member.php?action=getinfo&username={0}&json=true"
 
         self.logger.debug('Retreiving profile for user: {0}'.format(username))
 
@@ -28,7 +28,7 @@ class AwfulProfile:
         return awful.ProfilePage(text)
 
     async def fetch_profile_by_id(self, username):
-        base_url = "https://forums.somethingawful.com/member.php?action=getinfo&userid={0}"
+        base_url = "https://forums.somethingawful.com/member.php?action=getinfo&userid={0}&json=true"
 
         self.logger.debug('Retreiving profile for user: {0}'.format(username))
 

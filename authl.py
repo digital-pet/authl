@@ -14,6 +14,7 @@ import re
 import interactions
 import sqlite3
 import crypt
+import traceback
 from configparser import ConfigParser
 from awfulpy import *
 from contextlib import closing
@@ -22,6 +23,7 @@ from datetime import datetime
 ###
 # Config
 ###
+
 secrets = ConfigParser()
 secrets.read('secrets.ini')
 config = ConfigParser()
@@ -45,9 +47,7 @@ bschan=config['Discord']['botspamID']
 
 profile = AwfulProfile(bbuserid, bbpassword, sessionid, sessionhash)
 
-bot = interactions.Client(token=bottoken)
-
-#db_cursor.execute('''CREATE TABLE goons (userID TEXT NOT NULL, discordID TEXT NOT NULL, secret TEXT NOT NULL, is_banned INTEGER NOT NULL CHECK (is_banned IN (0, 1)), is_authed INTEGER NOT NULL CHECK (is_authed IN (0, 1)), is_sus INTEGER NOT NULL CHECK (is_sus IN (0, 1))) ''')
+bot = interactions.Client(token=bottoken, intents=interactions.Intents.ALL)
 
 ###
 # Setup logging
@@ -60,8 +60,12 @@ loglevelDict = {
     'error' : logging.ERROR,
     'critical' : logging.CRITICAL}
 
-logging.basicConfig(filename=config['Logging']['file'], encoding='utf-8', level=loglevelDict[config['Logging']['level']])
-
+logging.basicConfig(
+    format="%(asctime)s %(levelname)-10s %(message)s",
+    filename=config['Logging']['file'], 
+    encoding='utf-8', 
+    level=loglevelDict[config['Logging']['level']], 
+    datefmt='%Y-%m-%d %H:%M:%S')
 
 ###
 # db wrapper for parameterized queries
@@ -82,6 +86,7 @@ async def auth_processor():
     get_params = {}
     
     auth_query = '''UPDATE goons SET is_authed=1 WHERE userID=:userid LIMIT 1'''
+    err_query = '''UPDATE goons SET is_sus=1 WHERE userID=:userid LIMIT 1'''
 
     await asyncio.sleep(10)
 
@@ -94,31 +99,31 @@ async def auth_processor():
         if results:
             success = ""
             displaymessage = False
-        
             for r in results:
                 userid = r[0]
-                
-                user = interactions.Member(**await bot._http.get_member(guildid,r[1]), _client=bot._http)
-
-                if user.user is None:
-                    
+                try:
+                    user = interactions.Member(**await bot._http.get_member(guildid,r[1]), _client=bot._http)
+                except Exception:
+                    user = None
+                    logging.error("Error encountered finding user", exc_info=True)
+                if user is None:
                     logging.info(f"User with discord id {r[1]} is not in the server, skipping.")
-                
+                    err_params = {"userid":userid}
+                    query(dbfile, err_query, err_params)
+                    await botspamchannel.send(f"User https://forums.somethingawful.com/member.php?action=getinfo&userid={userid} left discord, please unsus if they rejoin.")
                     continue
 
                 
                 result = await profile.fetch_profile_by_id(userid)
-                fulltext = result.raw_profile_text
+                fulltext = result.biography
                 
                 position = fulltext.find(r[2])
                 if position > -1:
                     auth_params = {"userid":userid}
                     try:
                         
-                        #await get(bot, interactions.Member, parent_id=guildid, object_id=r[1])
-                        
-                        await user.add_role(goonrole,guildid)
-                        
+                        await user.add_role(goonrole,int(guildid))
+ 
                         success = success + "\n" + user.mention
                         
                         displaymessage = True
@@ -127,13 +132,13 @@ async def auth_processor():
                     
                     except Exception:
                         logging.error("Could not auth user", exc_info=True)
-                        await botspamchannel.send("Authenticating user " + user.mention + " failed.")
+                        await botspamchannel.send(f"Authenticating user {user.mention} failed.")
                         await asyncio.sleep(10)
                         continue
                 await asyncio.sleep(10)
                 
             if displaymessage:
-                await botspamchannel.send("Gave goon role to the following users " + success)
+                await botspamchannel.send(f"Gave goon role to the following users {success}")
                     
         logging.info("auth worker waiting")
         await asyncio.sleep(890)
@@ -157,28 +162,38 @@ class BannedUser(Exception):
 #   Authentication functions
 ###
 
-async def get_userid(username):
-    result = await profile.fetch_profile(username)
-    return result.userid
+async def get_profile(userid = None, username = None):
+    if userid:
+        return await profile.fetch_profile_by_id(userid)
+    elif username:
+        return await profile.fetch_profile(username)
+    else:
+        raise ArgumentError("get_profile called without userid or username")
 
+
+async def get_userid(username):
+    user_profile = await get_profile(username=username)
+    return user_profile.userid
+
+async def get_username(userid):
+    user_profile = await get_profile(userid=userid)
+    return user_profile.username
     
 async def calculate_suspicion(userid):
-    result = await profile.fetch_profile_by_id(userid)
-    fulltext = result.raw_profile_text
+    user_profile = await get_profile(userid=userid)
 
     sus = 0
     
     #sub 300 postcount is sus
-    re_res = re.search(r"en \<b\>-?([0-9]*)\<\/b\> po", fulltext)
 
-    postcount = int(re_res.group(1))
+    postcount = user_profile.posts
     
-    if postcount < 300:
+    if abs(postcount) < 300:
         sus = 1
      
     #regdate less than 3 months is sus
-    result = re.search(r"registering on \<b\>(.*)\<\/b\>", fulltext)
-    regdate = datetime.strptime(result.group(1), "%b %d, %Y")
+
+    regdate = datetime.utcfromtimestamp(user_profile.joindate)
     
     threshhold = datetime.timestamp(datetime.now()) - (2629800*3)
  
@@ -197,7 +212,7 @@ async def get_user(userid,discordid):
     
     results = query(dbfile, get_query, get_params)
     if len(results) > 1:
-        raise DuplicateEntry("Expected 1 result, got " + len(results))
+        raise DuplicateEntry(f"Expected 1 result, got {len(results)}")
     
     if not results:
     
@@ -217,13 +232,13 @@ async def get_user(userid,discordid):
         query(dbfile, ins_query,ins_params)
         results = query(dbfile, get_query, get_params)
     
-    if results[0][0] != userid:
+    if results[0][0] != str(userid):
         logging.error("UserMismatch - " + str(results))
-        raise UserMismatch("User provided " + userid + ", db contained " + results[0][0])
+        raise UserMismatch(f"User provided {userid}, db contained {results[0][0]}")
     
     if results[0][1] != discordid:
         logging.error("DiscordMismatch - " + str(results))
-        raise DiscordMismatch("User provided " + discordid + ", db contained " + results[0][1])
+        raise DiscordMismatch(f"User provided {discordid}, db contained {results[0][1]}")
     
     if results[0][3]:
         logging.error("BannedUser - " + str(results))
@@ -232,13 +247,56 @@ async def get_user(userid,discordid):
     return results
 
 
+###
+# Bot events
+###
+
+@bot.event(name="on_guild_member_add")
+async def on_guild_member_add(user: interactions.GuildMember):
+
+    logging.info("User joined")
+    
+    get_query = '''SELECT is_banned, is_authed FROM goons WHERE discordID=:discordid'''
+    get_params = {"discordid":str(user.id)}
+
+    try:
+        results = query(dbfile, get_query, get_params)
+    except Exception:
+        logging.error("Error encountered finding user", exc_info=True)
+        return
+
+    if not results:
+        logging.info("User not registered as goon")
+        return
+
+
+    if results[0][0]:
+    #    try:
+    #        await user.ban(guildid,reason="You're banned!")
+    #    except Exception:
+    #        #log error
+    #        pass
+        logging.info("User is banned, not granting role")
+        return
+
+    if results[0][1]:
+        try:
+            await user.add_role(goonrole)
+        except Exception:
+            logging.error("Error encountered giving user role", exc_info=True)
+            pass
+        return
+
+
 
 ###
 # Bot commands
 ###
 
 '''
-
+AUTHME
+AUTHME
+AUTHME
 '''
 
 @bot.command(
@@ -259,7 +317,7 @@ async def authme(ctx: interactions.CommandContext, username: str):
     response = ""
     userid = await get_userid(username)
     if userid is None:
-        response = f"{username} is not registered on SA."
+        response = f"{username} is not registered on SA.\n\nIf you want to be registered on SA you can spend :10bux: at https://forums.somethingawful.com. Otherwise, please honk in \#spambot-prison until we give you a role."
         await ctx.send(response)
         return
     
@@ -286,7 +344,7 @@ async def authme(ctx: interactions.CommandContext, username: str):
         await ctx.send(response)
         return
     
-    response = response + "\n" + f"Put the following key in your SA profile: {results[0][2]}"
+    response = f"{response}\nPut the following key in your SA profile \"about me\" section: {results[0][2]}\nDo not put it in ICQ number or homepage or any other field."
     
     if results[0][5]:
         await botspamchannel.send("User " + ctx.author.mention + " needs attention to complete authentication.")
@@ -298,14 +356,16 @@ async def authme(ctx: interactions.CommandContext, username: str):
 
 
 '''
-
+AUTHEM
+AUTHEM
+AUTHEM
 '''
 
 @bot.command(
     name="authem",
     description="Auth someone else on this discord",
     dm_permission=False,
-    default_member_permissions=interactions.Permissions.MANAGE_ROLES,
+    default_member_permissions=interactions.Permissions.KICK_MEMBERS,
     options = [
         interactions.Option(
             name = "user",
@@ -325,7 +385,7 @@ async def authem(ctx: interactions.CommandContext, user: interactions.User, user
     response = ""
     userid = await get_userid(username)
     if userid is None:
-        response = f"{username} is not registered on SA."
+        response = f"{username} is not registered on SA. Verify that they're actually a Something Awful poster."
         await ctx.send(response)
         return
     
@@ -348,7 +408,7 @@ async def authem(ctx: interactions.CommandContext, user: interactions.User, user
         await ctx.send(response)
         return
     
-    response = response + "\n" + user.mention + f" Put the following key in your SA profile: {results[0][2]}"
+    response = response + "\n" + user.mention + f" Put the following key in your SA profile \"about me\" section: {results[0][2]}\nDo not put it in ICQ number or homepage or any other field."
     
     if results[0][5]:
         await botspamchannel.send("User " + user.mention + " needs attention to complete authentication.")
@@ -360,18 +420,104 @@ async def authem(ctx: interactions.CommandContext, user: interactions.User, user
 
 
 '''
+WHOIS
+WHOIS
+WHOIS
+'''
 
+@bot.command(
+    name="whois",
+    description="Find a user on this server",
+    dm_permission=False,
+    default_member_permissions=interactions.Permissions.KICK_MEMBERS,
+    options = [
+        interactions.Option(
+            name = "discord",
+            description = "Their discord username",
+            type=interactions.OptionType.USER,
+            required=False),
+        interactions.Option(
+            name = "username",
+            description = "Their forums username",
+            type=interactions.OptionType.STRING,
+            required=False),],)
+
+async def whois(ctx: interactions.CommandContext, discord=None, username=None):
+
+    user = discord
+
+    userid_query = '''SELECT * FROM goons WHERE userID=:userid'''
+    discordid_query = '''SELECT * FROM goons WHERE discordID=:discordid'''
+
+
+    #botspamchannel = interactions.Channel(**await bot._http.get_channel(bschan), _client=bot._http)
+    response = ""
+
+    if user:
+        try:
+            discordid = int(user.id)
+        except Exception:
+            response = "User is not on this discord"
+            await ctx.send(response, ephemeral=True)
+            return
+        
+        params = {"discordid": discordid}
+        result = query(dbfile, discordid_query, params)
+        
+        if result:
+            for r in result:
+                try:
+                    username = await get_username(r[0])
+                    response = f"{response}\n{user.mention} - {username}"
+                except Exception:
+                    response = f"{response}\nUser not in discord - {username}"            
+        
+ 
+    elif username:
+        userid = await get_userid(username)
+        if userid is None:
+            response = f"{username} is not registered on SA."
+            await ctx.send(response, ephemeral=True)
+            return
+            
+        params = {"userid": userid}
+        
+        result = query(dbfile, userid_query, params)
+        
+        if result:
+            for r in result:
+                try:
+                    user = interactions.Member(**await bot._http.get_member(guildid,r[1]), _client=bot._http)
+                    response = f"{response}\n{user.mention} - {username}"
+                except Exception:
+                    response = f"{response}\nUser not in discord - {username}"
+                
+        else:
+            response = f"User {username} is not registered on this discord"            
+        
+    
+    else:
+        response = "You must provide at least one option."
+    
+    await ctx.send(response, ephemeral=True)
+
+'''
+LISTSUS
+LISTSUS
+LISTSUS
 '''
 
 @bot.command(
     name="listsus",
     description="List all sus goons",
     dm_permission=False,
-    default_member_permissions=interactions.Permissions.MANAGE_ROLES,)
+    default_member_permissions=interactions.Permissions.KICK_MEMBERS,)
 
 
 
 async def listsus(ctx: interactions.CommandContext):
+    
+    await ctx.defer()
 
     querystr = '''SELECT * FROM goons WHERE is_sus = 1 AND is_banned = 0'''
 
@@ -382,11 +528,16 @@ async def listsus(ctx: interactions.CommandContext):
     if result:
         response = str(len(result)) + " goons are sus:"
         for r in result:
-            user = interactions.Member(**await bot._http.get_member(guildid,r[1]), _client=bot._http)
-            try:
-                response = response + "\n" + user.mention + " (ID: " + r[0] + ")"
+            try: 
+                user = interactions.Member(**await bot._http.get_member(guildid,r[1]), _client=bot._http)
             except Exception:
-                response = response + "\n User not in discord (ID: " + r[0] + ")"
+                user = False
+            userid = r[0]
+            username = await get_username(r[0])
+            try:
+                response = f"{response}\n{user.mention} (ID: {userid}, Handle: {username})"
+            except Exception:
+                response = f"{response}\nUser not in discord (ID: {userid}, Handle: {username})"
 
     else:
         response = "No goons are currently being sus."
@@ -394,18 +545,22 @@ async def listsus(ctx: interactions.CommandContext):
     await ctx.send(response)
 
 '''
-
+LISTUNAUTH
+LISTUNAUTH
+LISTUNAUTH
 '''
 
 @bot.command(
     name="listunauth",
     description="List all unauthed goons",
     dm_permission=False,
-    default_member_permissions=interactions.Permissions.MANAGE_ROLES,)
+    default_member_permissions=interactions.Permissions.KICK_MEMBERS,)
 
 
 
 async def listunauth(ctx: interactions.CommandContext):
+
+    await ctx.defer()
 
     querystr = '''SELECT * FROM goons WHERE is_authed = 0 AND is_sus = 0 AND is_banned = 0'''
 
@@ -416,11 +571,16 @@ async def listunauth(ctx: interactions.CommandContext):
     if result:
         response = str(len(result)) + " goons haven't put the code in:"
         for r in result:
-            user = interactions.Member(**await bot._http.get_member(guildid,r[1]), _client=bot._http)
-            try:
-                response = response + "\n" + user.mention + " (ID: " + r[0] + ")"
+            try: 
+                user = interactions.Member(**await bot._http.get_member(guildid,r[1]), _client=bot._http)
             except Exception:
-                response = response + "\n User not in discord (ID: " + r[0] + ")"
+                user = False
+            userid = r[0]
+            username = await get_username(r[0])
+            try:
+                response = f"{response}\n{user.mention} (ID: {userid}, Handle: {username})"
+            except Exception:
+                response = f"{response}\nUser not in discord (ID: {userid}, Handle: {username})"
 
     else:
         response = "All the goons have followed instructions."
@@ -428,18 +588,22 @@ async def listunauth(ctx: interactions.CommandContext):
     await ctx.send(response)
 
 '''
-
+LISTBAN
+LISTBAN
+LISTBAN
 '''
 
 @bot.command(
     name="listban",
     description="List all banned goons",
     dm_permission=False,
-    default_member_permissions=interactions.Permissions.MANAGE_ROLES,)
+    default_member_permissions=interactions.Permissions.KICK_MEMBERS,)
 
 
 
 async def listban(ctx: interactions.CommandContext):
+
+    await ctx.defer()
 
     querystr = '''SELECT * FROM goons WHERE is_banned = 1'''
 
@@ -448,11 +612,53 @@ async def listban(ctx: interactions.CommandContext):
     if result:
         response = str(len(result)) + " goons are banned:"
         for r in result:
-            user = interactions.Member(**await bot._http.get_member(guildid,r[1]), _client=bot._http)
-            try:
-                response = response + "\n" + user.mention + " (ID: " + r[0] + ")"
+            try: 
+                user = interactions.Member(**await bot._http.get_member(guildid,r[1]), _client=bot._http)
             except Exception:
-                response = response + "\n User not in discord (ID: " + r[0] + ")"
+                user = False
+            userid = r[0]
+            username = await get_username(r[0])
+            try:
+                response = f"{response}\n{user.mention} (ID: {userid}, Handle: {username})"
+            except Exception:
+                response = f"{response}\nUser not in discord (ID: {userid}, Handle: {username})"
+    
+    else:
+
+        response = "Nobody's banned!"
+    
+    await ctx.send(response)
+
+'''
+LISTKLINE
+LISTKLINE
+LISTKLINE
+'''
+
+@bot.command(
+    name="listkline",
+    description="List all banned goons",
+    dm_permission=False,
+    default_member_permissions=interactions.Permissions.KICK_MEMBERS,)
+
+
+
+async def listkline(ctx: interactions.CommandContext):
+
+    await ctx.defer()
+
+    querystr = '''SELECT * FROM kos'''
+
+    params = {}
+    result = query(dbfile, querystr, params)
+    if result:
+        response = str(len(result)) + " goons are banned:"
+        for r in result:
+            #user = interactions.Member(**await bot._http.get_member(guildid,r[1]), _client=bot._http)
+            
+            userid = r[0]
+            username = await get_username(r[0])
+            response = f"{response}\nID: {userid}, Handle: {username}"
     
     else:
 
@@ -462,14 +668,16 @@ async def listban(ctx: interactions.CommandContext):
 
 
 '''
-
+UNSUS
+UNSUS
+UNSUS
 '''
 
 @bot.command(
     name="unsus",
     description="Remove the sus hold on a goon",
     dm_permission=False,
-    default_member_permissions=interactions.Permissions.MANAGE_ROLES,
+    default_member_permissions=interactions.Permissions.KICK_MEMBERS,
     options = [
         interactions.Option(
             name = "username",
@@ -500,14 +708,86 @@ async def unsus(ctx: interactions.CommandContext, username: str):
     await ctx.send(response)
 
 '''
+ROLEUPALL
+'''
+@bot.command(
+    name="roleupall",
+    description="Re-assign goon role on all goons",
+    dm_permission=False,
+    default_member_permissions=interactions.Permissions.KICK_MEMBERS,
+    options = [
+        interactions.Option(
+            name = "verification",
+            description = "Are you very, very sure you want to do this?",
+            type = interactions.OptionType.STRING,
+            required=True),],)
 
+async def roleupall(ctx: interactions.CommandContext, verification: str):
+    if verification != "abracadabra":
+        response = "You didn't say the magic word."
+        await ctx.send(response)
+        return
+
+    querystr = '''SELECT * FROM goons WHERE is_authed = 1 and is_banned = 0'''
+    params = {}
+
+    botspamchannel = interactions.Channel(**await bot._http.get_channel(bschan), _client=bot._http)
+
+    results = query(dbfile, querystr, params)
+    if not results:
+        response = "No goons are authed."
+        await ctx.send(response)
+
+    response = "Beginning bulk role re-assignment."
+    await ctx.send(response)
+
+    i = 0
+
+    response = "Gooned up:\n"
+
+
+    for r in results:
+        userid = r[0]
+        try:
+            user = interactions.Member(**await bot._http.get_member(guildid,r[1]), _client=bot._http)
+        except Exception:
+            user = None
+            logging.error("Error encountered finding user", exc_info=True)
+        if user is None:
+            logging.info(f"User with discord id {r[1]} is not in the server, skipping.")
+#            err_params = {"userid":userid}
+#            query(dbfile, err_query, err_params)
+#            await botspamchannel.send(f"User https://forums.somethingawful.com/member.php?action=getinfo&userid={userid} left discord, please unsus if they rejoin.")
+            continue
+
+        try: 
+            await user.add_role(goonrole,int(guildid))
+        except Exception:
+            continue
+
+        i += 1
+        response += f"{user.mention}\n"
+
+        if i % 15 == 0:
+            await botspamchannel.send(response)
+            response = "Gooned up:\n"
+            await asyncio.sleep(5)
+
+    if response != "Gooned up:\n":
+        await botspamchannel.send(response)
+
+    response = "It is done."
+    await botspamchannel.send(response)
+
+'''
+UNAUTH
 '''
 
 @bot.command(
-    name="kline",
-    description="Ban a goon before they join",
+    name="unauth",
+    description="Deauthorize a goon",
     dm_permission=False,
-    default_member_permissions=interactions.Permissions.MANAGE_ROLES,
+    default_member_permissions=interactions.Permissions.KICK_MEMBERS,
     options = [
         interactions.Option(
             name = "username",
@@ -517,9 +797,9 @@ async def unsus(ctx: interactions.CommandContext, username: str):
 
 
 
-async def kline(ctx: interactions.CommandContext, username: str):
+async def unauth(ctx: interactions.CommandContext, username: str):
 
-    querystr = '''INSERT INTO kos VALUES (:userid)'''
+    querystr = '''UPDATE goons SET is_authed = 0 WHERE userID=:userid LIMIT 1'''
 
     response = ""
     userid = await get_userid(username)
@@ -533,19 +813,104 @@ async def kline(ctx: interactions.CommandContext, username: str):
     
     query(dbfile, querystr, params)
 
+    response  = f"{str(username)} with id {userid} will be reauthenticated."
+    
+    await ctx.send(response)
+
+'''
+PURGE
+PURGE
+PURGE
+'''
+
+@bot.command(
+    name="purge",
+    description="Purge a goon from the database",
+    dm_permission=False,
+    default_member_permissions=interactions.Permissions.ADMINISTRATOR,
+    options = [
+        interactions.Option(
+            name = "username",
+            description = "Their username on the Something Awful Forums",
+            type=interactions.OptionType.STRING,
+            required=True),],)
+
+
+
+async def purge(ctx: interactions.CommandContext, username: str):
+
+    querystr = '''DELETE FROM goons WHERE userID=:userid LIMIT 1'''
+
+    response = ""
+    userid = await get_userid(username)
+
+    if userid is None:
+        response = f"{username} is not registered on SA."
+        await ctx.send(response)
+        return
+        
+    params = {"userid": userid}
+    
+    query(dbfile, querystr, params)
+
+    response  = f"{str(username)} with id {userid} has been purged from the database."
+    
+    await ctx.send(response)
+
+
+'''
+KLINE
+KLINE
+KLINE
+'''
+
+@bot.command(
+    name="kline",
+    description="Ban a goon before they join",
+    dm_permission=False,
+    default_member_permissions=interactions.Permissions.KICK_MEMBERS,
+    options = [
+        interactions.Option(
+            name = "username",
+            description = "Their username on the Something Awful Forums",
+            type=interactions.OptionType.STRING,
+            required=True),],)
+
+
+
+async def kline(ctx: interactions.CommandContext, username: str):
+
+    querystr = '''INSERT INTO kos VALUES (:userid, "")'''
+    querystr2 = '''UPDATE goons SET is_banned=1 WHERE userID=:userid LIMIT 1'''
+
+    response = ""
+    userid = await get_userid(username)
+
+    if userid is None:
+        response = f"{username} is not registered on SA."
+        await ctx.send(response)
+        return
+        
+    params = {"userid": userid}
+    
+    query(dbfile, querystr, params)
+    query(dbfile, querystr2, params)
+
     response  = f"{str(username)} with id {userid} has been k-lined."
     
     await ctx.send(response)
 
 '''
-
+UNKLINE
+UNKLINE
+UNKLINE
 '''
 
 @bot.command(
     name="unkline",
     description="Unban a goon before they join",
     dm_permission=False,
-    default_member_permissions=interactions.Permissions.MANAGE_ROLES,
+    default_member_permissions=interactions.Permissions.KICK_MEMBERS,
     options = [
         interactions.Option(
             name = "username",
@@ -576,14 +941,16 @@ async def unkline(ctx: interactions.CommandContext, username: str):
     await ctx.send(response)
 
 '''
-
+BANGOON
+BANGOON
+BANGOON
 '''
 
 @bot.command(
     name="bangoon",
     description="Ban a goon from getting the goon role",
     dm_permission=False,
-    default_member_permissions=interactions.Permissions.MANAGE_ROLES,
+    default_member_permissions=interactions.Permissions.KICK_MEMBERS,
     options = [
         interactions.Option(
             name = "username",
@@ -612,14 +979,16 @@ async def bangoon(ctx: interactions.CommandContext, username: str):
     
     
 '''
-
+UNBANGOON
+UNBANGOON
+UNBANGOON
 '''
 
 @bot.command(
     name="unbangoon",
     description="Allow a banned goon to get the goon role",
     dm_permission=False,
-    default_member_permissions=interactions.Permissions.MANAGE_ROLES,
+    default_member_permissions=interactions.Permissions.KICK_MEMBERS,
     options = [
         interactions.Option(
             name = "username",
@@ -649,43 +1018,45 @@ async def unbangoon(ctx: interactions.CommandContext, username: str):
 ## TODO: Purge command
 
 ###
-# Exception handler, crash fast for unhandled exceptions inside async functions
-###
-
-def handle_exception(loop, context):
-    # context["message"] will always be there; but context["exception"] may not
-    msg = context.get("exception", context["message"])
-    print("Please wait, crashing...")
-    logging.critical(f"Caught exception: {msg}", exc_info=True)
-    logging.info("Shutting down...")
-    os._exit(2)
-
-
-
-###
 # Main program starts here
 ###
 
-logging.info('===Startup===')
-loop = asyncio.get_event_loop()
-loop.set_exception_handler(handle_exception)
+async def main():
 
-# Backend Init
+    #logging.info('===Startup===')
 
-asyncio.ensure_future(auth_processor())
+    #loop = asyncio.get_running_loop()
+    #loop.set_exception_handler(handle_exception)
 
 
-# Discord init
-logging.info('Initializing Discord')
-asyncio.ensure_future(bot._ready())
+    background = asyncio.create_task(auth_processor())
+    foreground = asyncio.create_task(bot._ready())
+    
+    done, pending = await asyncio.wait(
+        [background, foreground],
+        return_when=asyncio.FIRST_EXCEPTION
+    )
+    
+    for task in pending:
+        task.cancel()
+    
+    for task in done:
+        if task.exception():
+            logging.error(''.join(traceback.format_exception(task.exception())))
+        
 
 try:
-    loop.run_forever()
+    retval = 0
+    
+    #hacky because interactions weirdness
+    bot._loop.run_until_complete(main())
 except KeyboardInterrupt:
     print('\nCtrl-C received, quitting immediately')
     logging.critical('Ctrl-C received, quitting immediately')
-    os._exit(1)
+    retval = 1
 except Exception:
     print("Please wait, crashing...")
     logging.critical("Fatal error in main loop", exc_info=True)
-    os._exit(2)
+    retval = 2
+finally:
+    os._exit(retval)

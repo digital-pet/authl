@@ -1,6 +1,8 @@
 from bs4 import BeautifulSoup
 from bs4 import Comment
 import re
+import json
+
 
 class ForumPost:
     def __init__(self, post):
@@ -41,20 +43,34 @@ class ForumThreadPage:
 
 class ProfilePage:
     def __init__(self,text):
-        soup = BeautifulSoup(text, 'lxml')
+        try:
+            profile = json.loads(text)
+            self.userid = profile['userid']
+            self.username = profile['username']
+            self.homepage = profile['homepage']
+            self.icq = profile['icq']
+            self.aim = profile['aim']
+            self.yahoo = profile['yahoo']
+            self.gender = profile['gender']
+            self.usertitle = profile['usertitle']
+            self.lastpost = profile['lastpost']
+            self.posts = profile['posts']
+            self.biography = profile['biography']
+            self.location = profile['location']
+            self.interests = profile['interests']
+            self.occupation = profile['occupation']
+            self.picture = profile['picture']
+            self.joindate = profile['joindate']
+            self.raw_text = text
+
         
-        raw_profile = soup.find("td", class_="info")
-        
-        
-        self.raw_profile_text = str(raw_profile)
-        if raw_profile is None:
-            self.raw_profile_text = None
+        except Exception:
             self.userid = None
-            return
-        
-        
-        match = re.search(r"banlist\.php\?userid=([0-9]*)", text)
-        self.userid = match.group(1)
+            self.username = None
+            self.raw_text = None
+            self.biography = None
+            self.joindate = 0
+            self.posts = 0
         
         ## TODO: capture all the separate sections instead of just all of it as a blob.
         
